@@ -2,6 +2,8 @@
 using AlgebraicInference
 using Catlab
 using UnicodePlots
+using SparseArrays
+using BenchmarkTools
 
 using Catlab.CategoricalAlgebra.FinRelations: BoolRig
 # A pixel array is an array with entries in the boolean semiring. The function defined below
@@ -14,12 +16,35 @@ using Catlab.CategoricalAlgebra.FinRelations: BoolRig
 # - Spivak, David I. et al. "Pixel Arrays: A fast and elementary method for solving
 #   nonlinear systems." *arXiv: Numerical Analysis* (2016): n. pag.
 const PixelArray{N} = Array{BoolRig, N}
+const SPixelArray = SparseMatrixCSC{BoolRig, Int64}
 
 function PixelArray(f::Function, xdim::NamedTuple, ydim::NamedTuple, tol::Real)
     rows = xdim.resolution
     cols = ydim.resolution
     
     result = PixelArray{2}(undef, rows, cols)
+    
+    xstep = (xdim.upper - xdim.lower) / xdim.resolution
+    ystep = (ydim.upper - ydim.lower) / ydim.resolution
+    
+    for i in 1:rows, j in 1:cols
+        xval = xdim.lower + (i - 0.5) * xstep
+        yval = ydim.lower + (j - 0.5) * ystep
+      
+        try
+            result[i, j] = -tol < f(xval, yval) < tol
+        catch
+            result[i, j] = false
+        end
+    end
+    
+    result
+end;
+function SPixelArray(f::Function, xdim::NamedTuple, ydim::NamedTuple, tol::Real)
+    rows = xdim.resolution
+    cols = ydim.resolution
+    
+    result = spzeros(BoolRig, rows, cols)
     
     xstep = (xdim.upper - xdim.lower) / xdim.resolution
     ystep = (ydim.upper - ydim.lower) / ydim.resolution
@@ -70,6 +95,9 @@ tol = .2
 R₁ = PixelArray(f₁, x, z, tol)
 R₂ = PixelArray(f₂, w, y, tol)
 R₃ = PixelArray(f₃, x, y, tol);
+S₁ = SPixelArray(f₁, x, z, tol)
+S₂ = SPixelArray(f₂, w, y, tol)
+S₃ = SPixelArray(f₃, x, y, tol);
 #
 spy(R₁; title="Equation 1", xlabel="x", ylabel="z")
 #
@@ -82,6 +110,11 @@ diagram = @relation (w, z) where (w::n, x::n, y::n, z::n) begin
     R₂(w, y)
     R₃(x, y)
 end
+sdiagram = @relation (w, z) where (w::n, x::n, y::n, z::n) begin
+    S₁(x, z)
+    S₂(w, y)
+    S₃(x, y)
+end
 
 to_graphviz(diagram; box_labels=:name, junction_labels=:variable)
 #
@@ -89,13 +122,25 @@ hom_map = Dict{Symbol, PixelArray}(
     :R₁ => R₁,
     :R₂ => R₂,
     :R₃ => R₃)
+shom_map = Dict{Symbol, SPixelArray}(
+    :S₁ => S₁,
+    :S₂ => S₂,
+    :S₃ => S₃)
 
 ob_map = Dict(
     :n => 125)
+sob_map = Dict(
+    :n => 125)
 
 problem = InferenceProblem(diagram, hom_map, ob_map)
+sproblem = InferenceProblem(sdiagram, shom_map, sob_map)
 
-R = solve(problem)
+@btime R = solve(problem)
+# ERROR: MethodError: no method matching permute(::SparseMatrixCSC{
+#@btime S = solve(sproblem)
+#R == S
+P = S₂ * transpose(S₃) * S₁
+P == R
 
 spy(R; title="Solution", xlabel="w", ylabel="z")
 #
